@@ -1,6 +1,15 @@
 import { parseTime, formatTime } from '../src/lib/time'
 import { parseSrt, buildSrt } from '../src/lib/srt'
 import { buildAnchors, mapTimestamp, mapCues, validateMapped } from '../src/lib/anchor'
+import {
+  PLAN_VERSION,
+  buildPlan,
+  isApplicable,
+  matchPlan,
+  normalizeText,
+  parsePlan,
+  serializePlan,
+} from '../src/lib/plan'
 import { SAMPLE_SRT } from '../src/sample'
 
 let failures = 0
@@ -122,6 +131,95 @@ const e2eIssues = validateMapped(e2e)
 assert(e2e[0].newStart === 3000, '第一条映射到目标 3s')
 assert(e2e[6].newStart === 60000, '最后一条映射到目标 60s')
 assert(e2e.every((l) => l.newStart >= 0 && l.newEnd > l.newStart), '外推后无非负/非正问题')
+
+// ---- 锚点方案 ----
+console.log('锚点方案：文本规范化')
+assert(normalizeText('  hello   world  ') === 'hello world', '去首尾空白 + 合并连续空白')
+assert(normalizeText('a\nb\t\tc  d') === 'a b c d', '换行/制表符一并合并')
+assert(normalizeText('') === '', '空串保持空串')
+assert(normalizeText('保持 原样') === '保持 原样', '已规范文本不变')
+
+console.log('锚点方案：导出 / 解析往返')
+const planAnchors = [
+  { source: cues[0].start, target: 3000 },
+  { source: cues[4].start, target: 40000 },
+]
+const plan = buildPlan(planAnchors, cues)
+assert(plan.version === PLAN_VERSION, '写入版本号')
+assert(plan.anchors.length === 2, '导出 2 个锚点')
+assert(plan.anchors[0].text === normalizeText(cues[0].text), '记录规范化文本')
+assert(plan.anchors[0].source === cues[0].start && plan.anchors[0].target === 3000, '记录原始/目标时间')
+const roundTrip = parsePlan(serializePlan(plan))
+assert(roundTrip.ok && JSON.stringify(roundTrip.plan) === JSON.stringify(plan), '序列化后解析往返一致')
+
+console.log('锚点方案：拒绝未知版本与畸形字段')
+assert(!parsePlan('not json').ok, '非 JSON 拒绝')
+assert(!parsePlan('[1,2]').ok, '顶层非对象拒绝')
+assert(!parsePlan('{"anchors":[]}').ok, '缺少版本号拒绝')
+assert(!parsePlan('{"version":2,"anchors":[]}').ok, '未知版本拒绝')
+assert(!parsePlan('{"version":"1","anchors":[]}').ok, '版本号类型畸形拒绝')
+assert(!parsePlan('{"version":1}').ok, '缺少 anchors 拒绝')
+assert(!parsePlan('{"version":1,"anchors":[{"source":"1","target":2,"text":"x"}]}').ok, 'source 类型畸形拒绝')
+assert(!parsePlan('{"version":1,"anchors":[{"source":1,"target":-2,"text":"x"}]}').ok, 'target 为负拒绝')
+assert(!parsePlan('{"version":1,"anchors":[{"source":1,"target":2}]}').ok, '缺少 text 拒绝')
+const emptyOk = parsePlan('{"version":1,"anchors":[]}')
+assert(emptyOk.ok, '空锚点数组为合法文件')
+
+console.log('锚点方案：匹配')
+// 同一字幕文件 → 全部直接匹配
+const m1 = matchPlan(plan.anchors, cues)
+assert(m1.every((m) => m.kind === 'exact'), '原字幕全部直接匹配')
+assert(m1.filter(isApplicable).length === 2, '两项均可应用')
+
+// 修订版：时间整体 +1000ms、文本不变 → 全部迁移
+const shifted = cues.map((c, i) => ({ ...c, index: i, start: c.start + 1000, end: c.end + 1000 }))
+const m2 = matchPlan(plan.anchors, shifted)
+assert(m2.every((m) => m.kind === 'moved'), '修订版全部迁移')
+assert(m2[0].source === cues[0].start + 1000, '迁移到新的起始时间')
+const rebuilt = buildAnchors(m2.filter(isApplicable).map((m) => [m.source ?? 0, m.anchor.target]))
+assert(rebuilt !== null && rebuilt.length === 2, '迁移结果可构造合法锚点序列')
+
+// 文本重复且无法直接匹配 → 冲突
+const dupCues = [...cues, { id: '8', index: 7, start: 50000, end: 52000, text: cues[0].text }]
+const m3 = matchPlan([{ source: 999, target: 3000, text: normalizeText(cues[0].text) }], dupCues)
+assert(m3[0].kind === 'duplicate' && !isApplicable(m3[0]), '文本重复 → 冲突不应用')
+
+// 文本缺失 → 冲突
+const m4 = matchPlan([{ source: 999, target: 3000, text: '不存在的文本' }], cues)
+assert(m4[0].kind === 'missing' && !isApplicable(m4[0]), '文本缺失 → 冲突不应用')
+
+// 目标时间不严格递增 → 后者冲突
+const m5 = matchPlan(
+  [
+    { source: cues[0].start, target: 5000, text: normalizeText(cues[0].text) },
+    { source: cues[1].start, target: 5000, text: normalizeText(cues[1].text) },
+  ],
+  cues,
+)
+assert(m5[0].kind === 'exact' && m5[1].kind === 'order', '目标时间相等 → 第二项冲突')
+assert(
+  buildAnchors(m5.filter(isApplicable).map((m) => [m.source ?? 0, m.anchor.target])) !== null,
+  '剔除冲突项后序列合法',
+)
+
+// 交叉迁移破坏原始时间顺序 → 后者冲突
+const swapped = cues.map((c, i) => {
+  if (i === 0) return { ...c, text: cues[1].text }
+  if (i === 1) return { ...c, text: cues[0].text }
+  return c
+})
+const m6 = matchPlan(
+  [
+    { source: cues[0].start, target: 3000, text: normalizeText(cues[0].text) },
+    { source: cues[1].start, target: 9000, text: normalizeText(cues[1].text) },
+  ],
+  swapped,
+)
+assert(m6[0].kind === 'moved' && m6[1].kind === 'order', '交叉迁移 → 后者破坏顺序标冲突')
+
+// 直接匹配优先于唯一文本迁移
+const m7 = matchPlan([{ source: cues[2].start, target: 8000, text: normalizeText(cues[2].text) }], cues)
+assert(m7[0].kind === 'exact' && m7[0].source === cues[2].start, '时间与文本均相同 → 直接匹配')
 
 console.log(failures === 0 ? '\n全部测试通过 ✅' : `\n${failures} 项失败 ❌`)
 process.exit(failures === 0 ? 0 : 1)
