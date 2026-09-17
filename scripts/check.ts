@@ -1,6 +1,13 @@
 import { parseTime, formatTime } from '../src/lib/time'
-import { parseSrt, buildSrt } from '../src/lib/srt'
+import { parseSrt, buildSrt, type Cue } from '../src/lib/srt'
 import { buildAnchors, mapTimestamp, mapCues, validateMapped } from '../src/lib/anchor'
+import {
+  normalizeText,
+  parsePlan,
+  previewPlan,
+  serializePlan,
+  type AnchorPlan,
+} from '../src/lib/plan'
 import { SAMPLE_SRT } from '../src/sample'
 
 let failures = 0
@@ -122,6 +129,260 @@ const e2eIssues = validateMapped(e2e)
 assert(e2e[0].newStart === 3000, '第一条映射到目标 3s')
 assert(e2e[6].newStart === 60000, '最后一条映射到目标 60s')
 assert(e2e.every((l) => l.newStart >= 0 && l.newEnd > l.newStart), '外推后无非负/非正问题')
+
+// ---- 锚点方案：规范化 ----
+console.log('文本规范化')
+assert(normalizeText('  hello   world  ') === 'hello world', '去首尾空白并合并连续空白')
+assert(normalizeText('a\r\n\t b') === 'a b', '换行/制表符合并为单空格')
+assert(normalizeText('\n\n  \t') === '', '纯空白规范化为空串')
+
+// ---- 锚点方案：序列化 + 往返 ----
+console.log('方案导出/解析')
+const planAnchors = [
+  { source: cues[0].start, target: 3000 },
+  { source: cues[3].start, target: 20000 },
+  { source: cues[6].start, target: 60000 },
+]
+const planJson = serializePlan(cues, planAnchors)
+assert(planJson !== null, 'serializePlan 返回 JSON')
+const parsedPlan = parsePlan(planJson ?? '')
+assert('plan' in parsedPlan && parsedPlan.plan.version === 1, '解析后版本号为 1')
+assert('plan' in parsedPlan && parsedPlan.plan.anchors.length === 3, '解析出 3 个锚点')
+assert(
+  'plan' in parsedPlan &&
+    parsedPlan.plan.anchors[0].text === normalizeText(cues[0].text) &&
+    parsedPlan.plan.anchors[0].source === '00:00:01,000' &&
+    parsedPlan.plan.anchors[0].target === '00:00:03,000',
+  '首项时间与规范化文本正确',
+)
+assert(planJson?.split('\n').join('').includes('"version": 1'), 'JSON 带版本号')
+
+const mkCue = (index: number, start: number, text: string): Cue => ({
+  index,
+  id: String(index + 1),
+  start,
+  end: start + 1000,
+  text,
+})
+const t1 = '第一句'
+const t2 = '第二句'
+const t3 = '第三句'
+const t4 = '第四句'
+const mkPlan = (anchors: Array<[string, string, string]>): AnchorPlan => ({
+  version: 1,
+  anchors: anchors.map(([source, target, text]) => ({ source, target, text })),
+})
+
+// ---- 方案预览：全部直接匹配 ----
+console.log('方案预览')
+const plan1 = mkPlan([
+  ['00:00:01,000', '00:00:03,000', t1],
+  ['00:00:05,000', '00:00:08,000', t2],
+])
+const cur1 = [mkCue(0, 1000, t1), mkCue(1, 5000, t2)]
+const pv1 = previewPlan(plan1, cur1)
+assert(pv1.validCount === 2 && pv1.conflictCount === 0, '原始时间+文本相同 → 全部直接匹配')
+assert(pv1.entries.every((e) => e.status === 'direct'), '状态均为 direct')
+assert(pv1.anchors?.length === 2 && pv1.anchors[0].source === 1000, '生成的锚点正确')
+
+// ---- 文本唯一但时间变了 → 迁移 ----
+const cur2 = [mkCue(0, 2000, t1), mkCue(1, 9000, t2)]
+const pv2 = previewPlan(plan1, cur2)
+assert(pv2.entries.every((e) => e.status === 'migrated'), '时间变化、文本唯一 → 迁移')
+assert(pv2.anchors?.[0].source === 2000 && pv2.anchors[0].target === 3000, '迁移后锚点绑定新原始时间、沿用目标时间')
+
+// ---- 规范化后相同（多余空白）也能直接匹配 ----
+const cur2b = [mkCue(0, 1000, `  ${t1}  `), mkCue(1, 5000, `${t2}\n第二行`.replace('第二句', '第二句'))]
+const plan1b = mkPlan([
+  ['00:00:01,000', '00:00:03,000', t1],
+  ['00:00:05,000', '00:00:08,000', normalizeText(t2)],
+])
+const pv2b = previewPlan(plan1b, cur2b)
+assert(pv2b.entries[0].status === 'direct', '首尾空白规范化后仍直接匹配')
+
+// ---- 文本缺失 → 冲突 ----
+const cur3 = [mkCue(0, 2000, t1), mkCue(1, 9000, '完全不同的句子')]
+const pv3 = previewPlan(plan1, cur3)
+assert(
+  pv3.entries[0].status === 'migrated' &&
+    pv3.entries[1].status === 'conflict' &&
+    pv3.entries[1].conflictReason === 'missing',
+  '文本找不到 → missing 冲突',
+)
+assert(pv3.validCount === 1, '仅 1 项有效')
+
+// ---- 文本重复 → 冲突（时间又不同）----
+const cur4 = [mkCue(0, 2000, t2), mkCue(1, 3000, t2), mkCue(2, 9000, t1)]
+const pv4 = previewPlan(plan1, cur4)
+assert(pv4.entries[1].status === 'conflict' && pv4.entries[1].conflictReason === 'duplicate', '重复文本 → duplicate 冲突')
+
+// ---- 重复文本但原始时间也相同：优先直接匹配（唯一精确命中）----
+const planDup = mkPlan([['00:00:02,000', '00:00:09,000', t2]])
+const pv4b = previewPlan(planDup, cur4)
+assert(pv4b.entries[0].status === 'direct', '时间+文本精确命中优先于重复判定')
+
+// ---- 迁移破坏锚点顺序 → 冲突 ----
+// 方案顺序 t1→t2→t3，当前字幕中 t3 排在 t1、t2 之前
+const plan5 = mkPlan([
+  ['00:00:01,000', '00:00:03,000', t1],
+  ['00:00:05,000', '00:00:08,000', t2],
+  ['00:00:09,000', '00:00:12,000', t3],
+])
+const cur5 = [mkCue(0, 1000, t3), mkCue(1, 2000, t1), mkCue(2, 6000, t2)]
+const pv5 = previewPlan(plan5, cur5)
+assert(
+  pv5.entries[2].status === 'conflict' && pv5.entries[2].conflictReason === 'order',
+  '迁移后落在首个有效锚点之前 → order 冲突',
+)
+assert(
+  pv5.entries[0].status === 'migrated' && pv5.entries[1].status === 'migrated',
+  '其余两项正常迁移',
+)
+
+// ---- 交叉迁移（迁移项与直接匹配交叉）→ 冲突 ----
+const plan6 = mkPlan([
+  ['00:00:01,000', '00:00:03,000', t1],
+  ['00:00:05,000', '00:00:08,000', t2],
+])
+const cur6 = [mkCue(0, 5000, t2), mkCue(1, 6000, t1)]
+const pv6 = previewPlan(plan6, cur6)
+assert(
+  pv6.entries[0].status === 'conflict' &&
+    pv6.entries[0].conflictReason === 'order' &&
+    pv6.entries[1].status === 'direct',
+  '迁移项越过直接匹配锚点 → order 冲突，直接匹配保留',
+)
+
+// ---- 迁移导致锚点顺序被破坏（按匹配后原始时间重排）→ 冲突 ----
+// 方案：t1(→10s) 在 t2(→20s) 之前；当前字幕 t2 在 t1 之前（时间也都变了，均走迁移）
+const plan7 = mkPlan([
+  ['00:00:01,000', '00:00:10,000', t1],
+  ['00:00:05,000', '00:00:20,000', t2],
+])
+const cur7 = [mkCue(0, 1000, t2), mkCue(1, 5000, t1)]
+const pv7 = previewPlan(plan7, cur7)
+assert(pv7.conflictCount === 1, '顺序颠倒恰好一项冲突')
+assert(
+  pv7.entries[0].status === 'migrated' &&
+    pv7.entries[1].status === 'conflict' &&
+    pv7.entries[1].conflictReason === 'order',
+  '迁移后顺序颠倒 → order 冲突（目标时间随之不再严格递增）',
+)
+
+// ---- 不替换文本：预览结果只携带时间，锚点不含文本副作用（结构性保证）----
+assert(
+  pv2.anchors?.every((a) => typeof a.source === 'number' && typeof a.target === 'number'),
+  '应用数据仅含 source/target，不触碰字幕文本',
+)
+
+// ---- 方案文件：严格校验 ----
+console.log('方案文件校验')
+const expectError = (raw: string, code: string, msg: string) => {
+  const r = parsePlan(raw)
+  assert('error' in r && r.error.code === code, msg)
+}
+expectError('{not json', 'invalid-json', '非法 JSON 拒绝')
+expectError('[]', 'invalid-shape', '顶层非对象拒绝')
+expectError('{"anchors":[]}', 'invalid-shape', '缺 version 拒绝')
+expectError('{"version": 2, "anchors": []}', 'unknown-version', '未知版本拒绝')
+expectError('{"version": "1", "anchors": []}', 'unknown-version', '版本号类型错误拒绝')
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [
+      { source: '00:00:01,000', target: '00:00:02,000', text: 'x' },
+    ],
+    exportedAt: 'today',
+  }),
+  'invalid-shape',
+  '额外顶层字段拒绝',
+)
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [{ source: '00:00:01,000', target: '00:00:02,000', text: 'x', extra: 1 }],
+  }),
+  'invalid-anchor',
+  '锚点含未知字段拒绝',
+)
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [{ source: 1000, target: 2000, text: 'x' }],
+  }),
+  'invalid-anchor',
+  '时间非字符串拒绝',
+)
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [{ source: 'bad', target: '00:00:02,000', text: 'x' }],
+  }),
+  'invalid-anchor',
+  '时间码无法解析拒绝',
+)
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [{ source: '00:00:01,000', target: '25:99:99,000', text: 'x' }],
+  }),
+  'invalid-anchor',
+  '目标时间码非法拒绝',
+)
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [
+      { source: '00:00:01,000', target: '00:00:05,000', text: 'x' },
+      { source: '00:00:02,000', target: '00:00:04,000', text: 'y' },
+    ],
+  }),
+  'invalid-anchor',
+  '目标时间不严格递增拒绝',
+)
+expectError(
+  JSON.stringify({
+    version: 1,
+    anchors: [
+      { source: '00:00:02,000', target: '00:00:03,000', text: 'x' },
+      { source: '00:00:02,000', target: '00:00:04,000', text: 'y' },
+    ],
+  }),
+  'invalid-anchor',
+  '原始时间重复拒绝',
+)
+expectError(
+  JSON.stringify({ version: 1, anchors: [{ source: '00:00:01,000', target: '00:00:02,000', text: '   ' }] }),
+  'invalid-anchor',
+  '规范化文本为空拒绝',
+)
+expectError(JSON.stringify({ version: 1, anchors: [] }), 'empty-anchors', '空锚点方案拒绝')
+
+// 合法但带点号毫秒的时间可解析
+const dotPlan = parsePlan(
+  JSON.stringify({
+    version: 1,
+    anchors: [{ source: '00:00:01.500', target: '00:00:02,000', text: t4 }],
+  }),
+)
+assert('plan' in dotPlan, '点号毫秒时间可被接受')
+
+// 端到端：示例导出方案 → 同一份字幕重新导入，全部直接匹配且锚点一致
+const e2ePlanJson = serializePlan(cues, [
+  { source: cues[0].start, target: 3000 },
+  { source: cues[6].start, target: 60000 },
+])
+const e2ePlanRes = parsePlan(e2ePlanJson ?? '')
+assert('plan' in e2ePlanRes, '端到端方案解析成功')
+if ('plan' in e2ePlanRes) {
+  const e2ePreview = previewPlan(e2ePlanRes.plan, cues)
+  assert(e2ePreview.validCount === 2, '同一份字幕 2 项全部直接匹配')
+  assert(e2ePreview.entries.every((e) => e.status === 'direct'), '全部 direct')
+  assert(
+    e2ePreview.anchors?.[0].source === cues[0].start && e2ePreview.anchors[0].target === 3000,
+    '端到端锚点值一致',
+  )
+}
 
 console.log(failures === 0 ? '\n全部测试通过 ✅' : `\n${failures} 项失败 ❌`)
 process.exit(failures === 0 ? 0 : 1)

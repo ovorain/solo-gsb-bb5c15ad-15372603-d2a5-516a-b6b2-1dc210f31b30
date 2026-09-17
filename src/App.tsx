@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import CueTable, { type FilterMode } from './components/CueTable'
+import PlanImportDialog from './components/PlanImportDialog'
 import { buildSrt, type Cue, parseSrt } from './lib/srt'
 import {
   buildAnchors,
@@ -8,6 +9,7 @@ import {
   type Anchor,
 } from './lib/anchor'
 import { formatTime, parseTime } from './lib/time'
+import { parsePlan, previewPlan, serializePlan, type PlanPreview } from './lib/plan'
 import { SAMPLE_SRT } from './sample'
 
 interface Notice {
@@ -23,7 +25,10 @@ export default function App() {
   const [filter, setFilter] = useState<FilterMode>('all')
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [planPreview, setPlanPreview] = useState<PlanPreview | null>(null)
+  const [planFileName, setPlanFileName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const planFileRef = useRef<HTMLInputElement>(null)
   const noticeTimer = useRef<number | undefined>(undefined)
 
   const lines = useMemo(() => (cues ? mapCues(cues, anchors) : []), [cues, anchors])
@@ -62,6 +67,8 @@ export default function App() {
       setAnchors([])
       setHistory([])
       setFilter('all')
+      setPlanPreview(null)
+      setPlanFileName('')
       flash({
         level: 'info',
         text:
@@ -193,14 +200,102 @@ export default function App() {
     flash({ level: 'info', text: '已导出校准后的 SRT 文件（序号与文本保持不变）。' })
   }, [cues, lines, fileName, hasErrors, errorCount, flash])
 
+  const downloadFile = useCallback((content: string, downloadName: string, mime: string) => {
+    const blob = new Blob([content], { type: mime })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = downloadName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const exportPlan = useCallback(() => {
+    if (!cues || anchors.length === 0) return
+    const payload = serializePlan(cues, anchors)
+    if (payload === null) {
+      flash({ level: 'error', text: '导出方案失败：存在无法对应到当前字幕的锚点。' })
+      return
+    }
+    const base = fileName.replace(/\.srt$/i, '') || 'subtitles'
+    downloadFile(payload, `${base}.anchor-plan.json`, 'application/json;charset=utf-8')
+    flash({
+      level: 'info',
+      text: `已导出锚点方案（${anchors.length} 个锚点，含原始/目标时间与规范化文本）。`,
+    })
+  }, [cues, anchors, fileName, downloadFile, flash])
+
+  const openPlanFile = useCallback(
+    (file: File) => {
+      if (!cues) {
+        flash({ level: 'error', text: '请先导入（修订版）SRT 字幕，再导入锚点方案。' })
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = parsePlan(String(reader.result ?? ''))
+        if ('error' in result) {
+          flash({ level: 'error', text: `方案文件被拒绝：${result.error.message}` })
+          return
+        }
+        const preview = previewPlan(result.plan, cues)
+        setPlanPreview(preview)
+        setPlanFileName(file.name)
+        flash({
+          level: 'info',
+          text:
+            `方案预览：${preview.validCount} 个锚点可应用（直接匹配 ${preview.entries.filter((e) => e.status === 'direct').length}、` +
+            `文本迁移 ${preview.entries.filter((e) => e.status === 'migrated').length}），` +
+            `${preview.conflictCount} 个冲突项不会应用。请在弹窗中确认。`,
+        })
+      }
+      reader.onerror = () => flash({ level: 'error', text: '读取方案文件失败。' })
+      reader.readAsText(file)
+    },
+    [cues, flash],
+  )
+
+  const applyPlan = useCallback(() => {
+    if (!planPreview || !planPreview.anchors) return
+    const next = buildAnchors(planPreview.anchors.map((a): [number, number] => [a.source, a.target]))
+    if (!next) {
+      flash({ level: 'error', text: '应用失败：有效锚点无法满足原始时间与目标时间严格递增。' })
+      setPlanPreview(null)
+      return
+    }
+    setHistory((h) => [...h, anchors])
+    setAnchors(next)
+    flash({
+      level: 'info',
+      text:
+        `已应用 ${planPreview.validCount} 个锚点（${planPreview.conflictCount} 个冲突项已忽略），` +
+        '字幕文本未被修改，可使用撤销恢复。',
+    })
+    setPlanPreview(null)
+    setPlanFileName('')
+  }, [planPreview, anchors, flash])
+
+  const cancelPlan = useCallback(() => {
+    setPlanPreview(null)
+    setPlanFileName('')
+    flash({ level: 'info', text: '已取消方案导入，当前锚点未做任何改动。' })
+  }, [flash])
+
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
       setDragging(false)
       const file = e.dataTransfer.files?.[0]
-      if (file) onFile(file)
+      if (!file) return
+      if (/\.json$/i.test(file.name)) {
+        openPlanFile(file)
+      } else {
+        onFile(file)
+      }
     },
-    [onFile],
+    [onFile, openPlanFile],
   )
 
   return (
@@ -244,6 +339,39 @@ export default function App() {
           </button>
           <button className="btn" disabled={history.length === 0} onClick={undo}>
             ↶ 撤销锚点操作{history.length > 0 ? `（${history.length}）` : ''}
+          </button>
+          <input
+            ref={planFileRef}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) openPlanFile(f)
+              e.target.value = ''
+            }}
+          />
+          <button
+            className="btn"
+            disabled={!cues || anchors.length === 0}
+            onClick={exportPlan}
+            title={
+              !cues
+                ? '请先导入 SRT 并设置锚点'
+                : anchors.length === 0
+                  ? '当前没有可导出的锚点'
+                  : '把当前锚点（原始/目标时间 + 规范化文本）导出为 JSON 方案'
+            }
+          >
+            导出锚点方案
+          </button>
+          <button
+            className="btn"
+            disabled={!cues}
+            onClick={() => planFileRef.current?.click()}
+            title={cues ? '在当前（修订版）字幕上复用 JSON 锚点方案' : '请先导入 SRT'}
+          >
+            导入锚点方案
           </button>
           <button className="btn btn-danger-outline" disabled={!cues || hasErrors} onClick={exportSrt}>
             导出新 SRT
@@ -305,7 +433,17 @@ export default function App() {
         </>
       )}
 
-      {dragging && <div className="drop-mask">松开以导入 SRT 文件</div>}
+      {planPreview && cues && (
+        <PlanImportDialog
+          preview={planPreview}
+          cues={cues}
+          fileName={planFileName}
+          onApply={applyPlan}
+          onCancel={cancelPlan}
+        />
+      )}
+
+      {dragging && <div className="drop-mask">松开以导入文件（.srt 字幕 / .json 锚点方案）</div>}
     </div>
   )
 }
