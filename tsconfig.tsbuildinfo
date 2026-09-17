@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/sample.ts","./src/components/CueTable.tsx","./src/components/TargetTimeInput.tsx","./src/lib/anchor.ts","./src/lib/srt.ts","./src/lib/time.ts","./vite.config.ts"],"version":"5.9.3"}

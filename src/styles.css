@@ -1,0 +1,500 @@
+:root {
+  --bg: #0f1420;
+  --bg-elev: #171e2e;
+  --bg-elev-2: #1e2740;
+  --border: #2a3550;
+  --border-strong: #3a4a6e;
+  --text: #e6ebf5;
+  --text-dim: #9aa7c2;
+  --text-faint: #6b7896;
+  --primary: #4f8cff;
+  --primary-hover: #6b9fff;
+  --danger: #ff5c72;
+  --danger-bg: rgba(255, 92, 114, 0.12);
+  --danger-border: rgba(255, 92, 114, 0.45);
+  --ok: #3ddc97;
+  --warn: #ffb84d;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 20px 24px 60px;
+  position: relative;
+  min-height: 100%;
+}
+
+.app.drag-over {
+  outline: 2px dashed var(--primary);
+  outline-offset: -8px;
+  border-radius: 12px;
+}
+
+/* ---------- Header ---------- */
+.app-header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  margin: 4px 0 18px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* ---------- Toolbar ---------- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+}
+
+.toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.toolbar-group.meta {
+  font-size: 13px;
+  color: var(--text-dim);
+  gap: 14px;
+}
+
+.anchor-count {
+  color: var(--primary-hover);
+}
+
+.error-count {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.ok-text {
+  color: var(--ok);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  appearance: none;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: #28345a;
+  border-color: #4c618f;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.btn-danger-outline {
+  border-color: var(--danger-border);
+  color: #ff8b9b;
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-small {
+  padding: 3px 9px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-faint);
+}
+
+/* ---------- Chips / filters ---------- */
+.filter-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.chip {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 5px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip + .chip {
+  border-left: 1px solid var(--border);
+}
+
+.chip:hover {
+  color: var(--text);
+  background: var(--bg-elev-2);
+}
+
+.chip.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ---------- Notice ---------- */
+.notice {
+  border-radius: 8px;
+  padding: 9px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  border: 1px solid;
+}
+
+.notice-info {
+  background: rgba(79, 140, 255, 0.1);
+  border-color: rgba(79, 140, 255, 0.4);
+  color: #a8c6ff;
+}
+
+.notice-error {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: #ff92a2;
+}
+
+/* ---------- Rules bar ---------- */
+.rules-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-dim);
+  font-size: 13px;
+  margin: 4px 2px 12px;
+}
+
+.rules-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+  box-shadow: 0 0 8px rgba(79, 140, 255, 0.8);
+}
+
+/* ---------- Table ---------- */
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: calc(100vh - 260px);
+  background: var(--bg-elev);
+}
+
+.cue-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 960px;
+}
+
+.cue-table thead th {
+  position: sticky;
+  top: 0;
+  background: #1a2236;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.cue-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(42, 53, 80, 0.6);
+  vertical-align: top;
+}
+
+.cue-table tbody tr:hover {
+  background: rgba(79, 140, 255, 0.05);
+}
+
+.col-no {
+  width: 48px;
+  color: var(--text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.col-time {
+  width: 190px;
+  white-space: nowrap;
+}
+
+.col-delta {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.col-anchor {
+  width: 200px;
+}
+
+.col-status {
+  width: 170px;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sep {
+  color: var(--text-faint);
+  margin: 0 5px;
+}
+
+.delta-plus {
+  color: var(--warn);
+}
+
+.delta-minus {
+  color: #7fc8ff;
+}
+
+.delta-zero {
+  color: var(--text-faint);
+}
+
+.bad-time {
+  color: var(--danger);
+  font-weight: 700;
+  text-decoration: underline wavy var(--danger);
+}
+
+/* ---------- Anchor input ---------- */
+.anchor-edit {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.time-input {
+  width: 128px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 4px 8px;
+}
+
+.time-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.25);
+}
+
+.time-input.invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(255, 92, 114, 0.2);
+}
+
+/* ---------- Text ---------- */
+.col-text {
+  min-width: 200px;
+}
+
+.cue-text {
+  margin: 0;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- Issues ---------- */
+.row-error {
+  background: var(--danger-bg);
+}
+
+.row-error:hover {
+  background: rgba(255, 92, 114, 0.17);
+}
+
+.issue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.issue-tag {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ok-tag {
+  color: var(--ok);
+  font-size: 12px;
+}
+
+.empty-row {
+  text-align: center;
+  color: var(--text-faint);
+  padding: 28px !important;
+}
+
+.export-blocked {
+  margin-top: 14px;
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: #ff92a2;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---------- Empty state ---------- */
+.empty-state {
+  display: flex;
+  justify-content: center;
+  padding-top: 48px;
+}
+
+.empty-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 36px 40px;
+  max-width: 620px;
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 40px;
+  margin-bottom: 8px;
+}
+
+.empty-card h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.empty-card p {
+  color: var(--text-dim);
+  margin: 0 0 20px;
+}
+
+.empty-card code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.empty-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.rules {
+  margin: 0;
+  padding-left: 18px;
+  text-align: left;
+  color: var(--text-dim);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---------- Drop mask ---------- */
+.drop-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 20, 32, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--primary-hover);
+  border: 3px dashed var(--primary);
+  pointer-events: none;
+  z-index: 10;
+}
+
+@media (max-width: 720px) {
+  .app {
+    padding: 14px;
+  }
+  .toolbar {
+    align-items: flex-start;
+  }
+}
